@@ -16,6 +16,7 @@ from app.whales import whale_name
 logger = logging.getLogger(__name__)
 
 _INSIDER_ALERT_LIMIT = 10
+_TELEGRAM_MESSAGE_LIMIT = 4096
 
 
 def _esc(value: object) -> str:
@@ -23,15 +24,49 @@ def _esc(value: object) -> str:
     return escape(str(value), quote=False)
 
 
+def split_message(text: str, limit: int = _TELEGRAM_MESSAGE_LIMIT) -> list[str]:
+    """Split ``text`` into chunks Telegram will accept (max ``limit`` chars each).
+
+    Telegram rejects any message over 4096 characters with ``BadRequest:
+    Message is too long``. Reports built from many whales/lines can easily
+    exceed that, so splits are made on newline boundaries (each report line is
+    a self-contained HTML fragment, e.g. ``<b>...</b>``) to avoid cutting an
+    HTML tag in half. A single line longer than ``limit`` is hard-split as a
+    last resort.
+    """
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    current = ""
+    for line in text.split("\n"):
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+        if len(line) <= limit:
+            current = line
+        else:
+            for start in range(0, len(line), limit):
+                chunks.append(line[start : start + limit])
+            current = ""
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 async def send_telegram_message(text: str, *, parse_mode: str | None = ParseMode.HTML) -> None:
-    """Send a message to the configured Telegram chat."""
+    """Send a message to the configured Telegram chat, splitting it if too long."""
     settings = get_settings()
     bot = Bot(token=settings.telegram_bot_token)
     try:
         async with bot:
-            await bot.send_message(
-                chat_id=settings.telegram_chat_id, text=text, parse_mode=parse_mode
-            )
+            for chunk in split_message(text):
+                await bot.send_message(
+                    chat_id=settings.telegram_chat_id, text=chunk, parse_mode=parse_mode
+                )
     except TelegramError:
         logger.exception("Failed to send Telegram message")
 

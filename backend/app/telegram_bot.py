@@ -26,6 +26,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 
 from app import reports
 from app.config import get_settings
+from app.telegram_notifier import split_message
 from app.whales import whale_name
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,21 @@ def _whales_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+async def _reply_chunked(
+    message: Message, text: str, *, reply_markup: InlineKeyboardMarkup | None = None
+) -> None:
+    """Reply with ``text``, splitting it across multiple messages if Telegram
+    would reject it as too long (max 4096 chars). The inline keyboard, if any,
+    is only attached to the last chunk.
+    """
+    chunks = split_message(text)
+    for index, chunk in enumerate(chunks):
+        is_last = index == len(chunks) - 1
+        await message.reply_text(
+            chunk, parse_mode=ParseMode.HTML, reply_markup=reply_markup if is_last else None
+        )
+
+
 async def _help(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is not None:
         await update.message.reply_text(_HELP_TEXT, parse_mode=ParseMode.HTML)
@@ -71,8 +87,8 @@ async def _help(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _list_whales(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is not None:
-        await update.message.reply_text(
-            reports.build_whales_list(), parse_mode=ParseMode.HTML, reply_markup=_whales_keyboard()
+        await _reply_chunked(
+            update.message, reports.build_whales_list(), reply_markup=_whales_keyboard()
         )
 
 
@@ -90,8 +106,8 @@ async def _portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if cik is None:
         await update.message.reply_text("Whale not found. Try /list_whales.")
         return
-    await update.message.reply_text(
-        reports.build_portfolio(cik), parse_mode=ParseMode.HTML, reply_markup=_whales_keyboard()
+    await _reply_chunked(
+        update.message, reports.build_portfolio(cik), reply_markup=_whales_keyboard()
     )
 
 
@@ -99,26 +115,20 @@ async def _week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None:
         return
     cik = reports.resolve_whale(" ".join(context.args)) if context.args else None
-    await update.message.reply_text(
-        reports.build_week(cik), parse_mode=ParseMode.HTML, reply_markup=_whales_keyboard()
-    )
+    await _reply_chunked(update.message, reports.build_week(cik), reply_markup=_whales_keyboard())
 
 
 async def _month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None:
         return
     cik = reports.resolve_whale(" ".join(context.args)) if context.args else None
-    await update.message.reply_text(
-        reports.build_month(cik), parse_mode=ParseMode.HTML, reply_markup=_whales_keyboard()
-    )
+    await _reply_chunked(update.message, reports.build_month(cik), reply_markup=_whales_keyboard())
 
 
 async def _report(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is not None:
-        await update.message.reply_text(
-            reports.build_weekly_report(),
-            parse_mode=ParseMode.HTML,
-            reply_markup=_whales_keyboard(),
+        await _reply_chunked(
+            update.message, reports.build_weekly_report(), reply_markup=_whales_keyboard()
         )
 
 
@@ -138,9 +148,7 @@ async def _on_whale_action(update: Update, _context: ContextTypes.DEFAULT_TYPE) 
     await query.answer()
     text = builder(cik)
     if isinstance(query.message, Message):
-        await query.message.reply_text(
-            text, parse_mode=ParseMode.HTML, reply_markup=_whales_keyboard()
-        )
+        await _reply_chunked(query.message, text, reply_markup=_whales_keyboard())
 
 
 def build_application() -> Application:  # type: ignore[type-arg]
