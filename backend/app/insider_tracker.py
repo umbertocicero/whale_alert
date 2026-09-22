@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from edgar import Company
@@ -31,7 +31,16 @@ _MAX_FORM4_PER_WHALE = 20
 
 
 def _to_date(value: object) -> date | None:
-    """Normalize an edgartools date (str or date) to a date, or None."""
+    """Normalize an edgartools date (str, date, datetime or pandas Timestamp) to a plain date.
+
+    ``datetime.datetime`` (and pandas ``Timestamp``, which subclasses it) also
+    satisfy ``isinstance(value, date)`` in Python, so that check must come
+    after the ``datetime`` check, otherwise a Timestamp is returned as-is
+    instead of being normalized -- which breaks comparisons against a plain
+    ``date`` (e.g. ``Timestamp >= date`` raises ``TypeError``).
+    """
+    if isinstance(value, datetime):
+        return value.date()
     if isinstance(value, date):
         return value
     text = str(value).strip()
