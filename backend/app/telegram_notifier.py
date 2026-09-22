@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+from html import escape
 
 from telegram import Bot
+from telegram.constants import ParseMode
 from telegram.error import TelegramError
 
 from app.config import get_settings
@@ -16,13 +18,20 @@ logger = logging.getLogger(__name__)
 _INSIDER_ALERT_LIMIT = 10
 
 
-async def send_telegram_message(text: str) -> None:
-    """Send a plain-text message to the configured Telegram chat."""
+def _esc(value: object) -> str:
+    """HTML-escape a value for safe inclusion in a Telegram HTML message."""
+    return escape(str(value), quote=False)
+
+
+async def send_telegram_message(text: str, *, parse_mode: str | None = ParseMode.HTML) -> None:
+    """Send a message to the configured Telegram chat."""
     settings = get_settings()
     bot = Bot(token=settings.telegram_bot_token)
     try:
         async with bot:
-            await bot.send_message(chat_id=settings.telegram_chat_id, text=text)
+            await bot.send_message(
+                chat_id=settings.telegram_chat_id, text=text, parse_mode=parse_mode
+            )
     except TelegramError:
         logger.exception("Failed to send Telegram message")
 
@@ -38,70 +47,49 @@ async def send_insider_alert(cik: str, transactions: list[InsiderTransaction]) -
 
 
 def _format_insider_message(cik: str, transactions: list[InsiderTransaction]) -> str:
-    """Build a plain-text Telegram message for insider transactions."""
-    lines = [f"\U0001f9fe Insider trades: {whale_name(cik)} (CIK {cik})"]
+    """Build an HTML-formatted Telegram message for insider transactions."""
+    lines = [
+        f"\U0001f9fe <b>Insider trades \u2014 {_esc(whale_name(cik))}</b> (CIK <code>{cik}</code>)"
+    ]
     for txn in transactions[:_INSIDER_ALERT_LIMIT]:
-        sign = "BUY " if txn.is_purchase else "SELL"
+        emoji = "\U0001f7e2 BUY " if txn.is_purchase else "\U0001f534 SELL"
         target = txn.issuer_ticker or txn.issuer_name or "?"
         lines.append(
-            f"  {sign} {target} [{txn.transaction_code}] "
+            f"\u2022 {emoji} <b>{_esc(target)}</b> [{txn.transaction_code}] "
             f"{txn.shares:,.0f} sh @ ${txn.price_per_share:,.2f} "
             f"(\u2248 ${txn.total_value_usd:,.0f}) on {txn.transaction_date.isoformat()}"
         )
     if len(transactions) > _INSIDER_ALERT_LIMIT:
-        lines.append(f"  ... and {len(transactions) - _INSIDER_ALERT_LIMIT} more")
+        lines.append(f"\u2026 and {len(transactions) - _INSIDER_ALERT_LIMIT} more")
     return "\n".join(lines)
 
 
 def _format_message(snapshot: WhaleFilingSnapshot, *, is_first_seen: bool) -> str:
-    """Build a plain-text Telegram message for a filing snapshot."""
+    """Build an HTML-formatted Telegram message for a filing snapshot."""
     header = "New whale filing" if not is_first_seen else "Whale tracked (first snapshot)"
     lines = [
-        f"\U0001f40b {header}: {snapshot.company_name} (CIK {snapshot.cik})",
+        f"\U0001f40b <b>{header}: {_esc(snapshot.company_name)}</b> "
+        f"(CIK <code>{snapshot.cik}</code>)",
         f"Filed: {snapshot.filing_date.isoformat()}",
-        f"Accession: {snapshot.accession_number}",
+        f"Accession: <code>{snapshot.accession_number}</code>",
         f"Portfolio value: ${snapshot.total_value_usd:,.0f} "
         f"across {snapshot.total_holdings} positions",
     ]
 
     new_positions = snapshot.top_new_positions()
     if new_positions:
-        lines.append("\nTop new buys:")
+        lines.append("\n<b>Top new buys:</b>")
         lines.extend(
-            f"  + {move.issuer} ({move.ticker}): ${move.value_usd:,.0f}" for move in new_positions
+            f"\u2022 + <b>{_esc(move.issuer)}</b> ({_esc(move.ticker)}): ${move.value_usd:,.0f}"
+            for move in new_positions
         )
 
     closed_positions = snapshot.top_closed_positions()
     if closed_positions:
-        lines.append("\nTop closed positions:")
+        lines.append("\n<b>Top closed positions:</b>")
         lines.extend(
-            f"  - {move.issuer} ({move.ticker}): ${abs(move.value_change_usd):,.0f}"
-            for move in closed_positions
-        )
-
-    return "\n".join(lines)
-    """Build a plain-text Telegram message for a filing snapshot."""
-    header = "New whale filing" if not is_first_seen else "Whale tracked (first snapshot)"
-    lines = [
-        f"\U0001f40b {header}: {snapshot.company_name} (CIK {snapshot.cik})",
-        f"Filed: {snapshot.filing_date.isoformat()}",
-        f"Accession: {snapshot.accession_number}",
-        f"Portfolio value: ${snapshot.total_value_usd:,.0f} "
-        f"across {snapshot.total_holdings} positions",
-    ]
-
-    new_positions = snapshot.top_new_positions()
-    if new_positions:
-        lines.append("\nTop new buys:")
-        lines.extend(
-            f"  + {move.issuer} ({move.ticker}): ${move.value_usd:,.0f}" for move in new_positions
-        )
-
-    closed_positions = snapshot.top_closed_positions()
-    if closed_positions:
-        lines.append("\nTop closed positions:")
-        lines.extend(
-            f"  - {move.issuer} ({move.ticker}): ${abs(move.value_change_usd):,.0f}"
+            f"\u2022 - <b>{_esc(move.issuer)}</b> ({_esc(move.ticker)}): "
+            f"${abs(move.value_change_usd):,.0f}"
             for move in closed_positions
         )
 

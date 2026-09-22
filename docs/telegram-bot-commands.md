@@ -48,6 +48,25 @@ Sempre da [@BotFather](https://t.me/BotFather), puoi personalizzare l'aspetto de
 
 `<n>` è l'indice mostrato da `/list_whales` (in alternativa un CIK o un frammento del nome). Se omesso, `/week` e `/month` aggregano tutte le whale monitorate.
 
+## Shortcut inline (pulsanti cliccabili)
+
+Ogni risposta del bot (`/list_whales`, `/portfolio`, `/week`, `/month`, `/report`) include sotto il messaggio una tastiera inline con una riga per ogni whale monitorata:
+
+```
+🏦 Berkshire Hathaway   📅 Week   🗓️ Month
+🏦 Scion Asset Mgmt     📅 Week   🗓️ Month
+...
+```
+
+- Il pulsante **🏦 &lt;nome whale&gt;** apre direttamente `/portfolio` per quella whale.
+- I pulsanti **📅 Week** e **🗓️ Month** aprono direttamente `/week` e `/month` per quella whale.
+
+Il CIK della whale è incorporato nel `callback_data` del pulsante (es. `portfolio:0001067983`), quindi non è mai necessario digitarlo a mano: basta un tap per ottenere la richiesta desiderata. La tastiera resta disponibile anche sotto il risultato, permettendo di passare da una whale all'altra senza dover reinviare `/list_whales`.
+
+## Formattazione dei messaggi
+
+I messaggi usano la formattazione **HTML** di Telegram (grassetto per intestazioni e nomi, `codice monospazio` per i CIK) ed emoji per distinguere a colpo d'occhio acquisti (🟢 BUY) e vendite (🔴 SELL).
+
 ## Note
 
 - Il bot funziona in **long polling**, avviato/arrestato automaticamente nel lifespan di FastAPI ([`app/main.py`](../backend/app/main.py)).
