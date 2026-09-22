@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -17,7 +18,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str
     telegram_chat_id: str
     sec_identity_email: str
-    whale_ciks: list[str]
+    whale_ciks: Annotated[list[str], NoDecode]
     poll_interval_minutes: int = 60
     database_path: Path = Path("whale_alert.db")
 
