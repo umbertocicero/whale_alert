@@ -10,6 +10,7 @@ Monitora i **filing 13F** dei grandi investitori istituzionali ("balene") deposi
 - [Prerequisiti](#prerequisiti)
 - [Installazione](#installazione)
 - [Configurazione](#configurazione)
+- [Documentazione whale CIK](docs/whale-ciks.md)
 - [Avvio](#avvio)
 - [API disponibili](#api-disponibili)
 - [Test e qualità del codice](#test-e-qualità-del-codice)
