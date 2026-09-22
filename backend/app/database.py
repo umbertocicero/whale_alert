@@ -73,7 +73,15 @@ def get_last_accession(db_path: Path, cik: str) -> str | None:
 
 
 def save_filing(db_path: Path, snapshot: WhaleFilingSnapshot) -> None:
-    """Persist a whale filing snapshot and its holdings, ignoring duplicates."""
+    """Persist a whale filing snapshot and its holdings, ignoring duplicates.
+
+    A filing without any parsed positions is not a valid 13F portfolio snapshot:
+    the DB should keep the filing only when the information table produced at
+    least one holding.
+    """
+    if not snapshot.top_holdings:
+        return
+
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             "INSERT OR IGNORE INTO filings "
