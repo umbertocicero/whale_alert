@@ -16,6 +16,7 @@ Oltre agli alert automatici, espone un **bot Telegram interattivo** con comandi 
 - [Installazione](#installazione)
 - [Configurazione](#configurazione)
 - [Documentazione whale CIK](docs/whale-ciks.md)
+- [Comandi del bot Telegram](docs/telegram-bot-commands.md)
 - [Avvio](#avvio)
 - [API disponibili](#api-disponibili)
 - [Test e qualità del codice](#test-e-qualità-del-codice)
