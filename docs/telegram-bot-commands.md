@@ -20,6 +20,21 @@ report - Report settimanale su richiesta
 help - Guida ai comandi
 ```
 
+## Icona e descrizione del bot (opzionale)
+
+Sempre da [@BotFather](https://t.me/BotFather), puoi personalizzare l'aspetto del bot nell'elenco chat e nel suo profilo:
+
+1. Invia `/setuserpic`, seleziona il tuo bot e carica un'immagine quadrata (es. 🐋) da usare come icona/avatar.
+2. Invia `/setdescription`, seleziona il bot e incolla il testo mostrato nella schermata iniziale prima che l'utente avvii la chat:
+   ```
+   🐋 Whale Alert — monitora le balene di Wall Street.
+   Ricevi alert su nuovi filing 13F e operazioni insider (Form 4), consulta portafogli e report settimanali direttamente in chat.
+   ```
+3. Invia `/setabouttext`, seleziona il bot e incolla il testo breve mostrato nella sezione "Info" del profilo:
+   ```
+   Bot di monitoraggio whale: filing 13F, insider trade e report settimanali.
+   ```
+
 ## Elenco comandi
 
 | Comando | Descrizione |
