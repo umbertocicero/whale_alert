@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from edgar import Company
@@ -162,3 +162,65 @@ async def check_all_insiders() -> None:
 
         database.save_insider_txns(settings.database_path, transactions)
         await send_insider_alert(cik, transactions)
+
+
+def fetch_form4_since(cik: str, since: date) -> list[InsiderTransaction]:
+    """Fetch every Form 4 transaction for a whale filed on or after ``since``.
+
+    Unlike `fetch_recent_form4` (capped at `_MAX_FORM4_PER_WHALE` for the
+    periodic incremental poll), this walks filings newest-first until one
+    older than ``since`` is found, so it can backfill an arbitrary window
+    regardless of how many Form 4s were filed in that period.
+    """
+    company = Company(cik)
+    filings = company.get_filings(form="4")
+    if not filings:
+        return []
+
+    results: list[InsiderTransaction] = []
+    for filing in filings:
+        filing_date = _to_date(getattr(filing, "filing_date", None))
+        if filing_date is not None and filing_date < since:
+            break
+        accession = str(getattr(filing, "accession_number", ""))
+        if not accession:
+            continue
+        try:
+            form4 = filing.obj()
+        except Exception:  # noqa: BLE001 - third-party parsing boundary
+            logger.debug("Could not parse Form 4 %s for whale %s", accession, cik)
+            continue
+        if form4 is None:
+            continue
+        results.extend(_parse_form4(cik, filing, form4))
+    return [txn for txn in results if txn.transaction_date >= since]
+
+
+async def backfill_insider_history(days: int = 30) -> None:
+    """One-off startup task: fetch and persist each whale's insider activity
+    from the last ``days`` days.
+
+    This does not send Telegram alerts (it would otherwise spam old trades on
+    every restart); it only backfills SQLite so `/insider/month` and the bot
+    commands have data immediately, even for whales with no new activity
+    since the last incremental poll.
+    """
+    settings = get_settings()
+    since = date.today() - timedelta(days=days)
+    for cik in settings.whale_ciks:
+        try:
+            transactions = await asyncio.to_thread(fetch_form4_since, cik, since)
+        except Exception:  # noqa: BLE001 - network/parsing boundary per whale
+            logger.exception("Failed to backfill Form 4 history for whale %s", cik)
+            continue
+
+        if not transactions:
+            continue
+
+        database.save_insider_txns(settings.database_path, transactions)
+        logger.info(
+            "Backfilled %d insider transaction(s) for whale %s (last %d days)",
+            len(transactions),
+            cik,
+            days,
+        )

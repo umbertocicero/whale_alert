@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -12,6 +13,7 @@ from telegram.ext import Application
 
 from app import database, reports
 from app.config import get_settings
+from app.insider_tracker import backfill_insider_history
 from app.scheduler import create_scheduler
 from app.telegram_bot import build_application
 from app.whales import whale_name
@@ -69,9 +71,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     application = await _start_bot()
 
+    backfill_task = asyncio.create_task(backfill_insider_history(days=30))
+
     yield
 
     await _stop_bot(application)
+    if not backfill_task.done():
+        backfill_task.cancel()
     scheduler.shutdown(wait=False)
 
 
