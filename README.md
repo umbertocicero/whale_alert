@@ -10,6 +10,7 @@ Oltre agli alert automatici, espone un **bot Telegram interattivo** con comandi 
 ## Indice
 
 - [Come funziona](#come-funziona)
+- [Backfill storico all'avvio](#backfill-storico-allavvio)
 - [Stack tecnologico](#stack-tecnologico)
 - [Struttura del progetto](#struttura-del-progetto)
 - [Prerequisiti](#prerequisiti)
@@ -34,17 +35,22 @@ flowchart LR
     D -- sì --> E[(SQLite)]
     E --> F[Telegram Bot API]
     F --> G[Chat Telegram]
+
+    H[Avvio app] -- una tantum --> I[insider_tracker.backfill_insider_history]
+    I -- ultimi 30 giorni, per ogni whale --> J[edgartools: Form 4]
+    J --> E
 ```
 
-1. Alla partenza dell'app, [`app/scheduler.py`](backend/app/scheduler.py) registra un job periodico (`check_all_whales`) con **APScheduler**, eseguito subito e poi ogni `POLL_INTERVAL_MINUTES`.
+1. Alla partenza dell'app, [`app/scheduler.py`](backend/app/scheduler.py) registra due job periodici con **APScheduler**, entrambi eseguiti subito e poi a intervalli regolari: `check_all_whales` (ogni `POLL_INTERVAL_MINUTES`) per i filing 13F e `check_all_insiders` (ogni `INSIDER_POLL_INTERVAL_MINUTES`) per i Form 4. Un terzo job cron (`send_weekly_report`) invia il report settimanale nel giorno/ora configurati.
 2. Per ogni CIK/ticker configurato in `WHALE_CIKS`, [`app/whale_tracker.py`](backend/app/whale_tracker.py) usa **edgartools** per scaricare l'ultimo filing 13F-HR dalla SEC EDGAR, estrarre le top 10 posizioni e calcolare le variazioni rispetto al filing precedente (nuove posizioni, chiusure, incrementi, decrementi).
 3. Se l'`accession_number` del filing è diverso dall'ultimo salvato, il filing viene persistito su **SQLite** ([`app/database.py`](backend/app/database.py)) e viene inviata una notifica formattata via **Telegram** ([`app/telegram_notifier.py`](backend/app/telegram_notifier.py)).
-4. **FastAPI** ([`app/main.py`](backend/app/main.py)) espone alcuni endpoint REST per consultare lo stato e lo storico dei filing rilevati.
+4. In parallelo, sempre e solo all'avvio dell'app, [`app/insider_tracker.py`](backend/app/insider_tracker.py) esegue un **backfill una tantum** (`backfill_insider_history`) che recupera e salva su SQLite le operazioni insider (Form 4) degli **ultimi 30 giorni** per ogni whale monitorata, senza inviare notifiche Telegram (evita di rispiegare all'utente vecchi trade già noti a ogni riavvio). Vedi la sezione dedicata [Backfill storico all'avvio](#backfill-storico-allavvio).
+5. **FastAPI** ([`app/main.py`](backend/app/main.py)) espone alcuni endpoint REST per consultare lo stato e lo storico dei filing rilevati.
 
 ## Stack tecnologico
 
 | Componente | Libreria | Ruolo |
-|---|---|---|
+| --- | --- | --- |
 | Web framework | [FastAPI](https://fastapi.tiangolo.com/) + [Uvicorn](https://www.uvicorn.org/) | Espone l'API REST e gestisce il ciclo di vita dell'app |
 | Scheduler | [APScheduler](https://apscheduler.readthedocs.io/) | Esegue il polling periodico dei filing SEC |
 | Dati SEC | [edgartools](https://github.com/dgunning/edgartools) | Scarica e parsa i filing 13F-HR da SEC EDGAR |
@@ -55,7 +61,7 @@ flowchart LR
 
 ## Struttura del progetto
 
-```
+```text
 whale_alert/
 ├── backend/
 │   ├── app/
@@ -135,7 +141,7 @@ DATABASE_PATH=whale_alert.db
 ```
 
 | Variabile | Descrizione |
-|---|---|
+| --- | --- |
 | `TELEGRAM_BOT_TOKEN` | Token del bot ottenuto da BotFather, nel formato `<id>:<hash>` |
 | `TELEGRAM_CHAT_ID` | ID numerico della chat Telegram a cui inviare gli alert (**non** lo username del bot) |
 | `SEC_IDENTITY_EMAIL` | Email usata come "identità" per le chiamate a SEC EDGAR (richiesto da edgartools/SEC) |
@@ -187,6 +193,37 @@ Il controllo viene eseguito immediatamente all'avvio dell'app e poi ogni
 `POLL_INTERVAL_MINUTES` minuti. Se SEC o il parsing falliscono per una whale,
 l'errore viene registrato nei log e il controllo prosegue sulle altre whale.
 
+### Backfill storico all'avvio
+
+Oltre al poll periodico incrementale (`check_all_insiders`, limitato ai 20
+Form 4 più recenti per whale e deduplicato per `accession_number`), all'avvio
+dell'app viene lanciato in background un task una tantum,
+`backfill_insider_history(days=30)` in [`app/insider_tracker.py`](backend/app/insider_tracker.py),
+registrato nella `lifespan` di [`app/main.py`](backend/app/main.py) tramite
+`asyncio.create_task(...)`.
+
+Caratteristiche principali:
+
+- **Non blocca l'avvio**: gira come task asincrono in background, quindi
+  `/health` e gli altri endpoint sono disponibili subito, anche mentre il
+  backfill è ancora in corso.
+- **Copertura completa a 30 giorni**: per ogni whale, `fetch_form4_since`
+  scorre i Form 4 dal più recente finché non trova un filing più vecchio della
+  soglia, senza il limite di 20 filing usato dal poll periodico. Utile per il
+  primo avvio, per una whale appena aggiunta a `WHALE_CIKS`, o dopo un downtime
+  più lungo dell'intervallo di poll.
+- **Nessuna notifica Telegram**: i dati vengono solo salvati in SQLite (con
+  deduplica automatica sulla chiave primaria di `insider_txns`), così gli
+  endpoint `/insider/month` e il comando `/month` del bot hanno subito dati
+  completi, senza spammare in chat trade già noti a ogni riavvio.
+- **Isolamento per whale**: un errore SEC/parsing su una whale viene loggato e
+  non interrompe il backfill delle altre.
+- **Cancellazione pulita**: se l'app viene fermata mentre il backfill è ancora
+  in corso, il task viene cancellato nello shutdown della `lifespan`.
+
+La finestra di 30 giorni è al momento un valore fisso nel codice (non
+configurabile via variabile d'ambiente).
+
 Per verificare gli identificativi attualmente configurati:
 
 ```text
@@ -203,9 +240,11 @@ GET http://127.0.0.1:8000/whales/0001067983/filings?limit=10
 
 1. Avvia una conversazione col tuo bot su Telegram e invia un messaggio qualsiasi.
 2. Apri nel browser (sostituendo `<TOKEN>` col tuo bot token):
-   ```
+
+   ```text
    https://api.telegram.org/bot<TOKEN>/getUpdates
    ```
+
 3. Cerca il campo `"chat":{"id": ...}` nella risposta JSON: quel numero è il tuo `TELEGRAM_CHAT_ID`.
 
 > 🔒 **Sicurezza**: non condividere mai il bot token pubblicamente; chi lo possiede può controllare il bot. Il file `.env` è escluso da git tramite `.gitignore`.
@@ -234,20 +273,23 @@ L'app sarà disponibile su `http://127.0.0.1:8000`.
 
 All'avvio, i log confermano che tutto è partito correttamente:
 
-```
+```text
 INFO:     Will watch for changes in these directories: ['...\backend\app']
 INFO:edgar.settings:Identity of the Edgar REST client set to [you@example.com]
 INFO:apscheduler.scheduler:Scheduler started
-INFO:app.main:Whale alert scheduler started (every 60 min) for 2 whale(s)
+INFO:app.main:Whale alert scheduler started (13F every 60 min, Form 4 every 360 min) for 2 whale(s)
 INFO:     Application startup complete.
+INFO:app.insider_tracker:Backfilled 3 insider transaction(s) for whale 0001067983 (last 30 days)
 ```
+
+> ℹ️ La riga `Backfilled ...` appare in modo asincrono, poco dopo l'avvio, una volta per ogni whale con almeno una transazione trovata negli ultimi 30 giorni (nessuna riga se non ce ne sono).
 
 ## API disponibili
 
 > ℹ️ Non esiste una route su `/` (root): visitare `http://127.0.0.1:8000/` restituisce volutamente `{"detail":"Not Found"}`. Usa uno degli endpoint elencati sotto.
 
 | Metodo | Endpoint | Descrizione |
-|---|---|---|
+| --- | --- | --- |
 | `GET` | `/health` | Endpoint di liveness, ritorna `{"status": "ok"}` |
 | `GET` | `/whales` | Elenca le whale monitorate con CIK e nome |
 | `GET` | `/whales/{cik}/filings?limit=10` | Ultimi filing 13F rilevati per una whale |
@@ -263,7 +305,7 @@ Documentazione interattiva (Swagger UI) disponibile su `http://127.0.0.1:8000/do
 Con `ENABLE_BOT=true`, il bot risponde ai seguenti comandi in chat:
 
 | Comando | Descrizione |
-|---|---|
+| --- | --- |
 | `/start`, `/help` | Guida ai comandi disponibili |
 | `/list_whales` | Elenca le whale monitorate con un indice di selezione |
 | `/portfolio <n>` | Composizione del portafoglio della whale indicata |
