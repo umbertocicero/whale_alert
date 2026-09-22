@@ -147,6 +147,8 @@ INFO:     Application startup complete.
 
 ## API disponibili
 
+> ℹ️ Non esiste una route su `/` (root): visitare `http://127.0.0.1:8000/` restituisce volutamente `{"detail":"Not Found"}`. Usa uno degli endpoint elencati sotto.
+
 | Metodo | Endpoint | Descrizione |
 |---|---|---|
 | `GET` | `/health` | Endpoint di liveness, ritorna `{"status": "ok"}` |
