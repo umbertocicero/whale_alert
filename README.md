@@ -68,12 +68,14 @@ whale_alert/
 
 ## Prerequisiti
 
-- **Python 3.13** (consigliato; testato con 3.13.11)
+- **Python 3.13 o superiore** (testato con 3.13.11)
 - Un **bot Telegram**: crealo parlando con [@BotFather](https://t.me/BotFather) su Telegram, che ti fornirà il `TELEGRAM_BOT_TOKEN` (formato `123456789:AAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`)
 - Il tuo **chat_id** Telegram numerico (vedi sezione [Configurazione](#configurazione))
 - Una **email valida** da usare come identità per le richieste a SEC EDGAR (richiesta dalla policy SEC, non serve un vero account)
 
 ## Installazione
+
+Windows PowerShell:
 
 ```powershell
 cd backend
@@ -81,14 +83,32 @@ py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-> ⚠️ Esegui sempre i comandi Python usando `.\.venv\Scripts\python.exe` dalla cartella `backend/`. Assicurati di non trovarti in `backend/app/` né di usare un venv diverso creato per errore alla radice del progetto.
+Linux/macOS:
+
+```bash
+cd backend
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+> ⚠️ Esegui sempre i comandi Python usando l'interprete del venv dalla cartella `backend/`: `\.venv\Scripts\python.exe` su Windows oppure `.venv/bin/python` su Linux/macOS. Assicurati di non trovarti in `backend/app/` né di usare un venv diverso creato alla radice del progetto.
 
 ## Configurazione
 
-Copia il template e compila i valori reali:
+Copia il template e compila i valori reali.
+
+Windows PowerShell:
 
 ```powershell
+cd backend
 Copy-Item .env.example .env
+```
+
+Linux/macOS:
+
+```bash
+cd backend
+cp .env.example .env
 ```
 
 Contenuto di `backend/.env`:
@@ -111,6 +131,58 @@ DATABASE_PATH=whale_alert.db
 | `POLL_INTERVAL_MINUTES` | Intervallo in minuti tra un controllo e l'altro (default `60`) |
 | `DATABASE_PATH` | Percorso del file SQLite dove salvare i filing rilevati |
 
+### Come funziona `WHALE_CIKS`
+
+`WHALE_CIKS` indica quali investitori istituzionali monitorare. Il nome della
+variabile è storico: ogni elemento può essere un **ticker** oppure un **CIK
+SEC** numerico, non necessariamente un CIK.
+
+```dotenv
+WHALE_CIKS=BRK.A,0001067983
+```
+
+Gli elementi sono separati da virgole e gli spazi vuoti vengono rimossi. Per
+esempio, la configurazione precedente crea due elementi:
+
+- `BRK.A`: ticker di Berkshire Hathaway Inc.;
+- `0001067983`: CIK SEC numerico di Berkshire Hathaway Inc.
+
+È preferibile usare il CIK numerico quando lo si conosce, perché identifica
+direttamente il soggetto nei sistemi SEC. Il ticker è comunque supportato da
+`edgartools`, che lo risolve verso la società corrispondente.
+
+Per ogni elemento, il controllo segue questo flusso:
+
+1. L'applicazione crea un client SEC per l'identificativo configurato e cerca i
+    filing con modulo `13F-HR`.
+2. Se esiste un filing, seleziona quello più recente e legge il relativo
+    prospetto delle partecipazioni (`information table`). Se il filing non ha
+    una tabella valida, viene ignorato.
+3. Le partecipazioni vengono ordinate per valore e le prime 10 vengono salvate
+    nello snapshot. Viene inoltre calcolato il confronto con il filing
+    precedente: nuove posizioni, posizioni chiuse, incrementi e decrementi.
+4. L'app confronta l'`accession_number` del filing con l'ultimo accession
+    salvato in SQLite. Se è uguale, il filing è già noto e non viene inviata
+    alcuna notifica.
+5. Se è diverso, salva lo snapshot nel database e invia l'alert Telegram. Il
+    primo filing mai visto per una whale viene trattato come `first seen`.
+
+Il controllo viene eseguito immediatamente all'avvio dell'app e poi ogni
+`POLL_INTERVAL_MINUTES` minuti. Se SEC o il parsing falliscono per una whale,
+l'errore viene registrato nei log e il controllo prosegue sulle altre whale.
+
+Per verificare gli identificativi attualmente configurati:
+
+```text
+GET http://127.0.0.1:8000/whales
+```
+
+Per consultare lo storico di una whale configurata:
+
+```text
+GET http://127.0.0.1:8000/whales/0001067983/filings?limit=10
+```
+
 ### Come ottenere il tuo `TELEGRAM_CHAT_ID`
 
 1. Avvia una conversazione col tuo bot su Telegram e invia un messaggio qualsiasi.
@@ -124,11 +196,20 @@ DATABASE_PATH=whale_alert.db
 
 ## Avvio
 
-Dalla cartella `backend/`, con il venv attivato:
+Dalla cartella `backend/`, avvia il server con il venv.
+
+Windows PowerShell:
 
 ```powershell
 cd backend
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --reload-dir app
+```
+
+Linux/macOS:
+
+```bash
+cd backend
+.venv/bin/python -m uvicorn app.main:app --reload --reload-dir app
 ```
 
 L'app sarà disponibile su `http://127.0.0.1:8000`.
@@ -159,12 +240,24 @@ Documentazione interattiva (Swagger UI) disponibile su `http://127.0.0.1:8000/do
 
 ## Test e qualità del codice
 
+Windows PowerShell:
+
 ```powershell
 cd backend
 .\.venv\Scripts\python.exe -m pytest -q          # Test automatici
 .\.venv\Scripts\python.exe -m mypy app tests     # Type-checking strict
 .\.venv\Scripts\python.exe -m ruff check .       # Linting
 .\.venv\Scripts\python.exe -m black .            # Formattazione
+```
+
+Linux/macOS:
+
+```bash
+cd backend
+.venv/bin/python -m pytest -q          # Test automatici
+.venv/bin/python -m mypy app tests     # Type-checking strict
+.venv/bin/python -m ruff check .       # Linting
+.venv/bin/python -m black .            # Formattazione
 ```
 
 ## Note e limitazioni
