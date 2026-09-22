@@ -1,6 +1,11 @@
 # 🐋 Whale Alert
 
-Monitora i **filing 13F** dei grandi investitori istituzionali ("balene") depositati alla SEC e invia **notifiche automatiche su Telegram** quando rileva nuove posizioni, chiusure o variazioni rilevanti nel loro portafoglio.
+Monitora i grandi investitori istituzionali ("balene") depositati alla SEC e invia **notifiche automatiche su Telegram**. Traccia due fonti dati complementari:
+
+- **Filing 13F** (trimestrali): composizione del portafoglio, nuove posizioni, chiusure e variazioni rilevanti.
+- **Form 4** (insider trades, entro 2 giorni lavorativi): acquisti/vendite quasi in tempo reale, che alimentano la vista "ultima settimana / ultimo mese".
+
+Oltre agli alert automatici, espone un **bot Telegram interattivo** con comandi per consultare la lista delle whale, la composizione del portafoglio e le operazioni recenti, più un **report settimanale** automatico.
 
 ## Indice
 
@@ -54,10 +59,14 @@ whale_alert/
 │   ├── app/
 │   │   ├── main.py               # Entry point FastAPI + lifecycle (lifespan)
 │   │   ├── config.py             # Settings (env vars / .env) via pydantic-settings
-│   │   ├── models.py             # Dataclass: Holding, HoldingMove, WhaleFilingSnapshot
-│   │   ├── database.py           # Persistenza SQLite (init/get/save/list filing)
-│   │   ├── scheduler.py          # Setup job periodico APScheduler
-│   │   ├── whale_tracker.py      # Logica di business: fetch 13F + confronto + notifica
+│   │   ├── models.py             # Dataclass: Holding, HoldingMove, WhaleFilingSnapshot, InsiderTransaction
+│   │   ├── whales.py             # Lista curata di whale famose (CIK → nome)
+│   │   ├── database.py           # Persistenza SQLite (filing, holdings, insider_txns)
+│   │   ├── scheduler.py          # Job APScheduler: 13F, Form 4, report settimanale
+│   │   ├── whale_tracker.py      # Fetch 13F + confronto + notifica
+│   │   ├── insider_tracker.py    # Fetch Form 4 (insider trades) + notifica
+│   │   ├── reports.py            # Generatori di testo (portafoglio, week, month, report)
+│   │   ├── telegram_bot.py       # Bot interattivo con comandi slash
 │   │   └── telegram_notifier.py  # Invio messaggi Telegram
 │   ├── tests/                    # Test pytest (models, database, config)
 │   ├── requirements.txt          # Dipendenze Python
@@ -128,9 +137,13 @@ DATABASE_PATH=whale_alert.db
 | `TELEGRAM_BOT_TOKEN` | Token del bot ottenuto da BotFather, nel formato `<id>:<hash>` |
 | `TELEGRAM_CHAT_ID` | ID numerico della chat Telegram a cui inviare gli alert (**non** lo username del bot) |
 | `SEC_IDENTITY_EMAIL` | Email usata come "identità" per le chiamate a SEC EDGAR (richiesto da edgartools/SEC) |
-| `WHALE_CIKS` | Lista di ticker o CIK separati da virgola degli investitori da monitorare (es. `BRK.A,0001067983`) |
-| `POLL_INTERVAL_MINUTES` | Intervallo in minuti tra un controllo e l'altro (default `60`) |
-| `DATABASE_PATH` | Percorso del file SQLite dove salvare i filing rilevati |
+| `WHALE_CIKS` | Lista di ticker o CIK separati da virgola da monitorare. **Se vuota**, viene usata la lista curata di whale famose in [`app/whales.py`](backend/app/whales.py) |
+| `POLL_INTERVAL_MINUTES` | Intervallo in minuti tra i controlli 13F (default `60`) |
+| `INSIDER_POLL_INTERVAL_MINUTES` | Intervallo in minuti tra i controlli Form 4 (default `360`) |
+| `WEEKLY_REPORT_DAY` | Giorno cron per il report settimanale (default `mon`) |
+| `WEEKLY_REPORT_HOUR` | Ora del report settimanale (default `9`) |
+| `ENABLE_BOT` | Abilita il bot Telegram interattivo in long polling (default `true`) |
+| `DATABASE_PATH` | Percorso del file SQLite dove salvare i dati rilevati |
 
 ### Come funziona `WHALE_CIKS`
 
@@ -234,10 +247,29 @@ INFO:     Application startup complete.
 | Metodo | Endpoint | Descrizione |
 |---|---|---|
 | `GET` | `/health` | Endpoint di liveness, ritorna `{"status": "ok"}` |
-| `GET` | `/whales` | Elenca i CIK/ticker attualmente monitorati |
-| `GET` | `/whales/{cik}/filings?limit=10` | Ritorna gli ultimi filing rilevati per una whale specifica |
+| `GET` | `/whales` | Elenca le whale monitorate con CIK e nome |
+| `GET` | `/whales/{cik}/filings?limit=10` | Ultimi filing 13F rilevati per una whale |
+| `GET` | `/whales/{cik}/portfolio` | Composizione del portafoglio 13F più recente |
+| `GET` | `/insider/week?cik=` | Operazioni insider (Form 4) negli ultimi 7 giorni |
+| `GET` | `/insider/month?cik=` | Filing + operazioni insider negli ultimi 30 giorni |
+| `GET` | `/report/weekly` | Testo del report settimanale (senza inviarlo) |
 
 Documentazione interattiva (Swagger UI) disponibile su `http://127.0.0.1:8000/docs` a server avviato.
+
+### Comandi del bot Telegram
+
+Con `ENABLE_BOT=true`, il bot risponde ai seguenti comandi in chat:
+
+| Comando | Descrizione |
+|---|---|
+| `/start`, `/help` | Guida ai comandi disponibili |
+| `/list_whales` | Elenca le whale monitorate con un indice di selezione |
+| `/portfolio <n>` | Composizione del portafoglio della whale indicata |
+| `/week [<n>]` | Operazioni insider (Form 4) degli ultimi 7 giorni |
+| `/month [<n>]` | Filing + operazioni insider degli ultimi 30 giorni |
+| `/report` | Report settimanale su richiesta |
+
+`<n>` è l'indice mostrato da `/list_whales` (in alternativa un CIK o un frammento del nome). Se omesso, `/week` e `/month` aggregano tutte le whale.
 
 ## Test e qualità del codice
 
@@ -263,6 +295,7 @@ cd backend
 
 ## Note e limitazioni
 
-- **Reti aziendali con SSL inspection/proxy** possono bloccare l'handshake TLS verso `api.telegram.org`, impedendo l'invio delle notifiche pur senza far crashare l'app (l'errore viene loggato e gestito). Se ti trovi in questa situazione, prova da una rete diversa o richiedi un'eccezione all'IT.
-- `WHALE_CIKS` accetta sia ticker (es. `BRK.A`) sia CIK numerici SEC (es. `0001067983`).
+- **Reti aziendali con SSL inspection/proxy** possono bloccare l'handshake TLS verso `api.telegram.org`, impedendo sia l'invio delle notifiche sia il long polling del bot interattivo (l'errore viene loggato e gestito senza far crashare l'app). Se ti trovi in questa situazione, prova da una rete diversa o richiedi un'eccezione all'IT.
+- `WHALE_CIKS` accetta sia ticker (es. `BRK.A`) sia CIK numerici SEC (es. `0001067983`); se lasciata vuota si usa la lista curata in [`app/whales.py`](backend/app/whales.py).
+- I filing **13F sono trimestrali**: i dati "settimanali/mensili" provengono dai **Form 4** (insider trades). Il parsing dei Form 4 di edgartools è difensivo: nomi di colonna diversi tra versioni degradano a "nessuna transazione" invece di generare errori.
 - Il progetto attualmente copre solo il **backend**; un frontend Svelte per una dashboard web è descritto nell'architettura originale ma non ancora implementato.

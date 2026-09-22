@@ -52,3 +52,29 @@ class WhaleFilingSnapshot:
         return sorted(closed_moves, key=lambda move: abs(move.value_change_usd), reverse=True)[
             :limit
         ]
+
+
+@dataclass(frozen=True, slots=True)
+class InsiderTransaction:
+    """A single insider (Form 4) transaction reported by a tracked whale.
+
+    Form 4 filings are near real-time (filed within 2 business days of the
+    trade), unlike quarterly 13F filings, so they power the weekly/daily view.
+    """
+
+    cik: str
+    owner_name: str
+    issuer_name: str
+    issuer_ticker: str
+    accession_number: str
+    transaction_date: date
+    filing_date: date
+    transaction_code: str  # "P" purchase, "S" sale, "A" grant, etc.
+    shares: float
+    price_per_share: float
+    total_value_usd: float
+
+    @property
+    def is_purchase(self) -> bool:
+        """Whether the transaction increased the insider's holdings."""
+        return self.transaction_code.upper() in {"P", "A"}
